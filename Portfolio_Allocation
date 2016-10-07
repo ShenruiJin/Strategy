@@ -1,0 +1,931 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Dec 21 15:32:20 2015
+
+                         PORTFOLIO ALLOCATION FUNCTIONS
+
+@author: tzercher
+"""
+#*****************************************************************************
+#                           IMPORTS
+#*****************************************************************************
+
+#*************************
+# IMPORT PYTHON LIBRAIRIES
+#*************************
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import datetime
+from os import chdir
+import sqlite3
+import scipy.optimize
+#**********************************
+# IMPORT NYC ENGINEERING LIBRAIRIES
+#**********************************
+os.chdir(r'H:\Local_Code')
+
+from class_CalendarUS import * 
+from DB_functions import *
+from class_Strategy import *
+from NTX_Stats import *
+
+
+#**************************************
+#** STATISTIC ESTIMATION FUNCTIONS  ***
+#**************************************
+
+"""         Covariance_matrix
+This function return the covariance matrix
+(unbiased estimator, log returns, 0-mean)
+"""
+
+def Covariance_matrix(Calculus_Date,Prices,vol_window):
+    newStrat=Prices.copy()
+    newStrat=newStrat[newStrat.index<=Calculus_Date].tail(vol_window+1)
+    Assets = newStrat.columns
+    
+    Covariance_matrix = np.zeros((len(Assets),len(Assets)),dtype=np.float)
+    #compute volatility
+    for i in range(0,len(Assets)):
+        asset=Assets[i]
+        Covariance_matrix[i,i]=252*(vol_window*np.mean((((np.log(newStrat[asset].pct_change()+1))**2)).dropna()/(vol_window-1)))
+    #compute covariance
+    for i in range(0,len(Assets)-1):
+        asset1=Assets[i]
+        for j in range(i+1,len(Assets)):
+            asset2=Assets[j]
+            Covariance_matrix[i,j]=252*vol_window*np.mean((np.log(newStrat[asset2].pct_change()+1)*np.log(newStrat[asset1].pct_change()+1)).dropna())/(vol_window-1)
+            Covariance_matrix[j,i]=Covariance_matrix[i,j]
+
+    #return the covariance matrix
+    return Covariance_matrix
+
+def Min_Def_Ratio(Covariance_matrix):
+    #inequalitys constraints
+    cons=({'type': 'eq', 'fun': lambda x:  1 - sum(x)})
+   
+    #equality constraint 
+    bds=[]
+    for i in range(0,len(Covariance_matrix)):
+        bds.append((0.000000000000001,None))
+
+    #set initial value
+    initial_value= np.zeros((len(Covariance_matrix),1),dtype=np.float)
+    for i in range(0,len(Covariance_matrix)):
+        initial_value[i,0]=1.0/len(Covariance_matrix)
+
+    result =scipy.optimize.minimize(lambda x:-np.dot(np.transpose(x),(np.diagonal(Covariance_matrix)**0.5))/(np.dot(np.transpose(x),np.dot(Covariance_matrix,x))**0.5), x0=initial_value,constraints=cons,bounds=bds).x
+    optimal_weights=[]
+    for i in range(0,len(result)):
+        optimal_weights.append(float(result[i]))
+    return optimal_weights
+
+def Covariance_matrix2(Calculus_Date,Prices,vol_window,decay_var):
+    newStrat=Prices.copy()
+    newStrat=newStrat[newStrat.index<=Calculus_Date].tail(vol_window+1)
+    Assets = newStrat.columns
+    
+    Covariance_matrix = np.zeros((len(Assets),len(Assets)),dtype=np.float)
+    #compute volatility
+    
+    decay_list=[]
+    for i in range(0,vol_window):
+        decay_list.append((1-decay_var)*decay_var**i)
+    decay_array=np.array(decay_list)
+
+    for i in range(0,len(Assets)):
+        asset=Assets[i]
+        Covariance_matrix[i,i]=252*(np.sum(((np.log(newStrat[asset].pct_change()+1))**2).dropna()*decay_array[::-1]))
+        
+    #compute covariance
+    for i in range(0,len(Assets)-1):
+        asset1=Assets[i]
+        for j in range(i+1,len(Assets)):
+            asset2=Assets[j]
+            Covariance_matrix[i,j]=252*np.sum((np.log(newStrat[asset2].pct_change()+1)*np.log(newStrat[asset1].pct_change()+1)).dropna()*decay_array[::-1])
+            Covariance_matrix[j,i]=Covariance_matrix[i,j]
+
+    #return the covariance matrix
+    return Covariance_matrix
+
+
+
+    
+
+
+def beta_adjusted(newStrat):
+    spx=pd.read_csv(r"H:\Desktop\SPX_data.csv")
+    var_name=newStrat.columns[0]
+    date_begin=newStrat.index[0]
+    date_end=newStrat.index[-1]
+    spx.index=spx["Date"].map(lambda x: datetime.datetime.strptime(x,"%m/%d/%Y"))
+    del spx["Date"]
+    spx=spx.loc[spx.index[spx.index>=date_begin]]
+    spx=spx.loc[spx.index[spx.index<=date_end]]
+    newStrat=pd.merge(newStrat,spx,how='inner',left_index=True,right_index=True)
+    newStrat['Days']=0
+    for k in range(1,len(newStrat)):
+        newStrat['Days'][k]=(newStrat.index[k]-newStrat.index[k-1]).days
+#    newStrat['Days']=1
+    newStrat["sum_SPX"]=pd.rolling_sum(newStrat['Days']*np.log(newStrat['SPX Index'].pct_change()+1)**2,window=120)
+    newStrat["sum_SPX_SP5"]=pd.rolling_sum(newStrat['Days']*np.log(newStrat['SPX Index'].pct_change()+1)*np.log(newStrat[var_name].pct_change()+1),window=120)
+    newStrat["SPX_Vol"]=pd.rolling_mean(newStrat['Days']*np.log(newStrat['SPX Index'].pct_change()+1)**2,window=120)
+    newStrat["Cov"]=pd.rolling_mean(newStrat['Days']*np.log(newStrat['SPX Index'].pct_change()+1)*np.log(newStrat[var_name].pct_change()+1),window=120)
+    newStrat["Beta"]=pd.rolling_mean(newStrat['Days']*np.log(newStrat['SPX Index'].pct_change()+1)*np.log(newStrat[var_name].pct_change()+1),window=120)/(newStrat["SPX_Vol"])
+#    newStrat["Beta"]=1/newStrat["Beta"]
+    newStrat["Beta"]=newStrat["Beta"].map(lambda x: min(x,2))
+    newStrat["Beta"]=newStrat["Beta"].map(lambda x: max(x,0.5))
+    newStrat["IndexBeta"]=100.0
+    newStrat['Rebal']=0
+    RebalIndex = 121
+    while newStrat.index[RebalIndex].month ==newStrat.index[RebalIndex-1].month:
+        RebalIndex+=1
+    RebalBeta= RebalIndex-1
+    iFirstDate=RebalIndex
+#    rate =(newStrat["Last_Price."+Rate[0]][RebalIndex]+dBorrow)/(100*365)
+    
+    for k in range(RebalIndex,len(newStrat)):
+        if newStrat.index[k].month!=newStrat.index[k-1].month:
+            RebalIndex=k-1
+            RebalBeta=k-2
+            newStrat['Rebal'][k-1]=1            
+            beta =newStrat["Beta"][RebalBeta]
+            perf = (newStrat[var_name][k]/newStrat[var_name][RebalIndex]-1)
+            borrow_cost=0
+#            borrow_cost=  min(0,1-beta)*rate*(newStrat.index[k]-newStrat.index[RebalIndex]).days#/newStrat["IndexBeta"][RebalIndex]
+            newStrat["IndexBeta"][k]=newStrat["IndexBeta"][RebalIndex]*(1+perf-beta*(newStrat["SPX Index"][k]/newStrat["SPX Index"][RebalIndex]-1))            
+
+#            rate =(newStrat["Last_Price."+Rate[0]][k-1]+1)/(100*365)
+        else:
+            beta =newStrat["Beta"][RebalBeta]
+            perf = (newStrat[var_name][k]/newStrat[var_name][RebalIndex]-1)
+            borrow_cost=0
+#            borrow_cost=  min(0,1-beta)*rate*(newStrat.index[k]-newStrat.index[RebalIndex]).days#/newStrat["IndexBeta"][RebalIndex]
+            newStrat["IndexBeta"][k]=newStrat["IndexBeta"][RebalIndex]*(1+perf-beta*(newStrat["SPX Index"][k]/newStrat["SPX Index"][RebalIndex]-1))  
+                
+
+    newStrat=newStrat[newStrat.index[iFirstDate-1]:newStrat.index[len(newStrat)-1]]
+    return newStrat["IndexBeta"]
+
+
+
+def top_return_arg(array,num):
+    top_index=np.argpartition(array,-num)[-num:]
+    other_index=np.argpartition(array,-num)[:-num]
+    return (top_index,other_index)
+    
+def low_return_arg(array,num):
+    low_index=np.argpartition(array,num)[:num]
+    other_index=np.argpartition(array,num)[num:]
+    return (low_index,other_index)
+
+def two_side_return_arg(array,lownum,highnum):
+    top_index=top_return_arg(array,highnum)[0]
+    low_index=low_return_arg(array,lownum)[0]
+    other_list=[]
+    for i in range(0,len(array)):
+        if (i not in top_index) and (i not in low_index):
+            other_list.append(i)
+    mid_index=np.array(other_list)
+    return (low_index+top_index,mid_index) 
+
+def two_side_filter(array,num,ranking_type):
+    if ranking_type=="top":
+        return top_return_arg(array,num)
+    elif ranking_type=="low":
+        return low_return_arg(array,num)
+    elif ranking_type=="two side":
+        return two_side_return_arg(array,num[0],num[1])
+    elif ranking_type=="none":
+        return ("empty",range(0,len(array)))
+    
+
+
+"""         Correlation_matrix
+This function return the correlation matrix
+(unbiased estimator, log returns, 0-mean)
+"""
+     
+def Correlation_matrix(Calculus_Date,Prices,vol_window):
+    newStrat=Prices.copy()
+    newStrat=newStrat[newStrat.index<=Calculus_Date].tail(vol_window+1)
+    Assets = newStrat.columns
+    Correlation_matrix = np.zeros((len(Assets),len(Assets)),dtype=np.float)
+    #compute volatility
+    for i in range(0,len(Assets)):
+        asset=Assets[i]
+        Correlation_matrix[i,i]=252*(vol_window*np.mean((((np.log(newStrat[asset].pct_change()+1))**2)).dropna()/(vol_window-1)))
+    #compute covariance
+    for i in range(0,len(Assets)-1):
+        asset1=Assets[i]
+        for j in range(i+1,len(Assets)):
+            asset2=Assets[j]
+            Correlation_matrix[i,j]=vol_window*np.mean((np.log(newStrat[asset2].pct_change()+1)*np.log(newStrat[asset1].pct_change()+1)).dropna())/(vol_window-1)
+            Correlation_matrix[i,j]=Correlation_matrix[i,j]/(np.sqrt(Correlation_matrix[i,i]*Correlation_matrix[j,j]))
+            Correlation_matrix[j,i]=Correlation_matrix[i,j]
+    for i in range(0,len(Assets)):
+        Correlation_matrix[i,i]=1
+    return Correlation_matrix    
+    
+    
+"""         Mean_vector
+This function return the mean vector
+"""
+
+def Mean_vector(Calculus_Date,Prices,mean_window):
+    newStrat=Prices.copy()
+    newStrat=newStrat[newStrat.index<=Calculus_Date].tail(mean_window+1)
+    Assets = newStrat.columns
+    mean_vect = np.zeros((len(Assets),1),dtype=np.float)
+    for i in range(0,len(Assets)-1):
+        asset1=Assets[i]
+        mean_vect[i,0]=np.mean(np.log(newStrat[asset1].pct_change()+1))
+    return mean_vect
+    
+
+#**************************************
+#**         MINIMUM VARIANCE        ***
+#**************************************    
+
+def Min_Variance(Covariance_matrix):
+    #inequalitys constraints
+    cons=({'type': 'eq', 'fun': lambda x:  1 - sum(x)})
+   
+    #equality constraint 
+    bds=[]
+    for i in range(0,len(Covariance_matrix)):
+        bds.append((0.000000000000001,None))
+
+    #set initial value
+    initial_value= np.zeros((len(Covariance_matrix),1),dtype=np.float)
+    for i in range(0,len(Covariance_matrix)):
+        initial_value[i,0]=1/len(Covariance_matrix)
+
+    result =scipy.optimize.minimize(lambda x:np.dot(np.transpose(x),np.dot(x,Covariance_matrix)), x0=initial_value,method="SLSQP",constraints=cons,bounds=bds).x
+    optimal_weights=[]
+    for i in range(0,len(result)):
+        optimal_weights.append(float(result[i]))
+    return optimal_weights
+    
+
+def Min_Def_Ratio(Covariance_matrix):
+    #inequalitys constraints
+    cons=({'type': 'eq', 'fun': lambda x:  1 - sum(x)})
+   
+    #equality constraint 
+    bds=[]
+    for i in range(0,len(Covariance_matrix)):
+        bds.append((0.000000000000001,None))
+
+    #set initial value
+    initial_value= np.zeros((len(Covariance_matrix),1),dtype=np.float)
+    for i in range(0,len(Covariance_matrix)):
+        initial_value[i,0]=1.0/len(Covariance_matrix)
+
+    result =scipy.optimize.minimize(lambda x:-np.dot(np.transpose(x),(np.diagonal(Covariance_matrix)**0.5))/(np.dot(np.transpose(x),np.dot(Covariance_matrix,x))**0.5), x0=initial_value,method="SLSQP",constraints=cons,bounds=bds).x
+    optimal_weights=[]
+    for i in range(0,len(result)):
+        optimal_weights.append(float(result[i]))
+    return optimal_weights
+
+#**************************************
+#**    EQUAL RISK CONTRIBUTUTION    ***
+#************************************** 
+ 
+def ERP_function_to_minimize(Covariance_matrix,x):
+    summation = 0.0
+    product = np.dot(Covariance_matrix,x)
+    for i in range(0,len(x)):
+        for j in range(0,len(x)):
+            summation+=(float(x[i])* float(product[i])-float(x[j])* float(product[j]))**2
+    return float(summation)
+    
+def ERC(Covariance_matrix):
+    cons=({'type': 'eq', 'fun': lambda x:  1 - sum(x)})
+   
+    #equality constraint 
+    bds=[]
+    for i in range(0,len(Covariance_matrix)):
+        bds.append((0.000000000000001,0.999999999))
+        
+     #set initial value
+    initial_value= np.zeros((len(Covariance_matrix),1),dtype=np.float)
+    initial_value[0,0]=0.5
+    initial_value[1,0]=0.5
+    result =scipy.optimize.minimize(lambda x:ERP_function_to_minimize(Covariance_matrix,x), x0=initial_value,method="SLSQP",constraints=cons,bounds=bds).x
+    optimal_weights=[]
+    for i in range(0,len(result)):
+        optimal_weights.append(float(result[i]))
+    return  optimal_weights
+
+#**************************************
+#**    MEAN VARIANCE ALLOCATION     ***
+#************************************** 
+
+#// TO DO ......................
+
+#**************************************
+#**    OVERLAY ALLOCTION            ***
+#************************************** 
+def Overlay_Allocation(dfPrice,Index,Overlay,vol_window):
+    data= dfPrice.copy()
+    data['Vol1']=np.sqrt(252)*pd.rolling_std(np.log(data[Index].pct_change()+1),vol_window)
+    data['Vol2']=np.sqrt(252)*pd.rolling_std(np.log(data[Overlay].pct_change()+1),vol_window)
+    
+    #Allocation 1
+    data['W11']=data['Vol2']/(data['Vol2']+data['Vol1'])
+    data['W12']=data['Vol1']/(data['Vol2']+data['Vol1'])
+    #Allocation 2
+    data['W21']=1
+    data['W22']=data['Vol1']/data['Vol2']
+    data['W22']=data['W22'].fillna(0)
+    data['W22']=data['W22'].map(lambda x :max(0,x))
+    data['W22']=data['W22'].map(lambda x :min(x,2))
+    #quaterly rebalancing
+    quaterly=[12,3,6,9]
+    data['Rebal']=0
+    data['date']=data.index
+    for k in range(2,len(data)):
+        if data.index[k].month!=data['date'].index[k-1].month:
+            if data.index[k].month in quaterly:
+                data['Rebal'][k]=1
+                
+    data['W11 rebal']=0.0
+    data['W12 rebal']=0.0
+    data['W21 rebal']=0.0
+    data['W22 rebal']=0.0
+    
+    for k in range(2,len(data)):
+        if data['Rebal'][k]==1:
+            data['W11 rebal'][k]=data['W11'][k]
+            data['W12 rebal'][k]=data['W12'][k]
+            data['W21 rebal'][k]=data['W21'][k]
+            data['W22 rebal'][k]=data['W22'][k]
+        else:
+            data['W11 rebal'][k]= data['W11 rebal'][k-1]
+            data['W12 rebal'][k]= data['W12 rebal'][k-1]
+            data['W21 rebal'][k]=  data['W21 rebal'][k-1]
+            data['W22 rebal'][k]=data['W22 rebal'][k-1]
+
+    return data
+
+def Overlay_Allocation_execute(dfPrice,Index,Overlay,vol_window):
+    data= dfPrice.copy()
+    data['Vol1']=np.sqrt(252)*pd.rolling_std(np.log(data[Index].pct_change()+1),vol_window)
+    data['Vol2']=np.sqrt(252)*pd.rolling_std(np.log(data[Overlay].pct_change()+1),vol_window)
+    
+    #Allocation 1
+    data['W11']=data['Vol2']/(data['Vol2']+data['Vol1'])
+    data['W12']=data['Vol1']/(data['Vol2']+data['Vol1'])
+    #Allocation 2
+    data['W21']=1
+    data['W22']=data['Vol1']/data['Vol2']
+    data['W22']=data['W22'].fillna(0)
+    data['W22']=data['W22'].map(lambda x :max(0,x))
+    data['W22']=data['W22'].map(lambda x :min(x,2))
+    #quaterly rebalancing
+    quaterly=[12,3,6,9]
+    data['Rebal']=0
+    data['date']=data.index
+    for k in range(2,len(data)):
+        if data.index[k].month!=data['date'].index[k-1].month:
+            if data.index[k].month in quaterly:
+                data['Rebal'][k]=1
+                
+    data['W11 rebal']=0.0
+    data['W12 rebal']=0.0
+    data['W21 rebal']=0.0
+    data['W22 rebal']=0.0
+    
+    for k in range(2,len(data)):
+        if data['Rebal'][k]==1:
+            data['W11 rebal'][k]=data['W11'][k]
+            data['W12 rebal'][k]=data['W12'][k]
+            data['W21 rebal'][k]=data['W21'][k]
+            data['W22 rebal'][k]=data['W22'][k]
+        else:
+            data['W11 rebal'][k]= data['W11 rebal'][k-1]
+            data['W12 rebal'][k]= data['W12 rebal'][k-1]
+            data['W21 rebal'][k]=  data['W21 rebal'][k-1]
+            data['W22 rebal'][k]=data['W22 rebal'][k-1]
+            
+    strikeIndex = 83
+    data['Allocation']=100.0
+    for k in range(84,len(data)):
+        perf= data['W22 rebal'][k-1]*(data[Overlay][k]/data[Overlay][strikeIndex]-1)+data['W21 rebal'][k-1]*(data[Index][k]/data[Index][strikeIndex]-1)
+        data['Allocation'][k]=data['Allocation'][strikeIndex]*(1+perf)
+        if data['Rebal'][k]==1:
+            strikeIndex=k
+    data=data[data.index>=data.index[83]]        
+    return data
+    
+#**************************************
+#**    BETA    ALLOCTION            ***
+#**************************************     
+    
+def Beta_Allocation(dfPrice,Index,Contract_list,Rate,dBorrow):
+    newStrat=dfPrice.copy()
+    #********************************************
+    # OPEN DATABASE, LOAD PRICES,CLOSE DB
+    #********************************************
+    chdir(r'K:\ED_ExcelTools\Transfert\Structuring\Proprietary Indices\Python Script\US Structuring Libraries')
+    lDB=[]
+    lCreated_at = []
+    for element in os.listdir():
+        if element.endswith(".db"):
+            lDB.append(element)
+            lCreated_at.append(os.path.getmtime(element))  
+    database = pd.DataFrame({'File':lDB,'Created_at':lCreated_at})
+    database=database.sort('Created_at',ascending = False)
+    dbName = database.loc[database.index[0],'File']
+    conn = sqlite3.connect(dbName)
+    c=conn.cursor()
+    #load rates 
+    dateBegin=newStrat.index[0]
+    dateEnd=newStrat.index[len(newStrat)-1]
+    dftemp = getAssetPrices(Rate,dateBegin,dateEnd,c)
+    newStrat[Rate]=dftemp['Price']
+    newStrat=newStrat.fillna(method='ffill')
+    conn.close()
+    #********************************************
+    #               BETA CALCULUS
+    #********************************************
+    newStrat['Days']=0
+    for k in range(1,len(newStrat)):
+        newStrat['Days'][k]=(newStrat.index[k]-newStrat.index[k-1]).days
+        
+    newStrat[Index+".Vol"]=pd.rolling_mean(newStrat['Days']*np.log(newStrat[Index].pct_change()+1)**2,window=120)
+    
+    for strat in Contract_list:
+        newStrat[strat+".Beta"]=pd.rolling_mean(newStrat['Days']*np.log(newStrat[Index].pct_change()+1)*np.log(newStrat[strat].pct_change()+1),window=120)/(newStrat[Index+".Vol"])
+        newStrat[strat+".Beta"]=1/newStrat[strat+".Beta"]
+        newStrat[strat+".Beta"]=newStrat[strat+".Beta"].map(lambda x: min(x,2))
+        newStrat[strat+".Beta"]=newStrat[strat+".Beta"].map(lambda x: max(x,0.5))
+    #***************************************************
+    #               MONTHLY REBALANCING BETA RATIO
+    #***************************************************
+
+    for strat in Contract_list:
+        newStrat[strat+".IndexBeta"]=100.0
+    newStrat['Rebal']=0
+    RebalIndex = 121
+    while newStrat.index[RebalIndex].month ==newStrat.index[RebalIndex-1].month:
+        RebalIndex+=1
+    RebalBeta= RebalIndex-1
+    iFirstDate=RebalIndex
+    rate =(newStrat[Rate][RebalIndex]+1)/(100*365)
+    
+    for k in range(RebalIndex+1,len(newStrat)):
+        if newStrat.index[k-1].month!=newStrat.index[k-2].month:
+            RebalIndex=k-1
+            RebalBeta=k-2
+            newStrat['Rebal'][k-1]=1
+            rate =(newStrat[Rate][k-1]+dBorrow)/(100*365)
+        for strat in Contract_list:
+ 
+            beta =newStrat[strat+".Beta"][RebalBeta]
+            perf = beta  * (newStrat[strat][k]/newStrat[strat][RebalIndex]-1)
+            borrow_cost=  min(0,1-beta)*rate*(newStrat.index[k]-newStrat.index[RebalIndex]).days#/newStrat[strat+".IndexBeta"][RebalIndex]
+            newStrat[strat+".IndexBeta"][k]=newStrat[strat+".IndexBeta"][RebalIndex]*(1+perf+ borrow_cost)
+            
+    for strat in Contract_list:    
+        if strat!=Contract_list[0]:
+            del newStrat[strat]
+            del newStrat[strat+".Beta"]
+    del newStrat[Rate]
+    del newStrat[Index+".Vol"]
+    del newStrat["Days"] 
+    newStrat=newStrat[newStrat.index[iFirstDate]:newStrat.index[len(newStrat)-1]]
+    return newStrat    
+ 
+def Beta_Allocation_Short(dfPrice,Index,Contract_list,Rate,dBorrow):
+    newStrat=dfPrice.copy()
+    #********************************************
+    # OPEN DATABASE, LOAD PRICES,CLOSE DB
+    #********************************************
+    chdir(r'K:\ED_ExcelTools\Transfert\Structuring\Proprietary Indices\Python Script\US Structuring Libraries')
+    lDB=[]
+    lCreated_at = []
+    for element in os.listdir():
+        if element.endswith(".db"):
+            lDB.append(element)
+            lCreated_at.append(os.path.getmtime(element))  
+    database = pd.DataFrame({'File':lDB,'Created_at':lCreated_at})
+    database=database.sort('Created_at',ascending = False)
+    dbName = database.loc[database.index[0],'File']
+    conn = sqlite3.connect(dbName)
+    c=conn.cursor()
+    #load rates 
+    dateBegin=newStrat.index[0]
+    dateEnd=newStrat.index[len(newStrat)-1]
+    dftemp = getAssetPrices(Rate,dateBegin,dateEnd,c)
+    newStrat[Rate]=dftemp['Price']
+    newStrat=newStrat.fillna(method='ffill')
+    conn.close()
+    #********************************************
+    #               BETA CALCULUS
+    #********************************************
+    newStrat['Days']=0
+    for k in range(1,len(newStrat)):
+        newStrat['Days'][k]=(newStrat.index[k]-newStrat.index[k-1]).days
+        
+    newStrat[Index+".Vol"]=pd.rolling_mean(newStrat['Days']*np.log(newStrat[Index].pct_change()+1)**2,window=120)
+    
+    for strat in Contract_list:
+        newStrat[strat+".Beta"]=pd.rolling_mean(newStrat['Days']*np.log(newStrat[Index].pct_change()+1)*np.log(newStrat[strat].pct_change()+1),window=120)/(newStrat[Index+".Vol"])
+        newStrat[strat+".Beta"]=1/newStrat[strat+".Beta"]
+        newStrat[strat+".Beta"]=newStrat[strat+".Beta"].map(lambda x: min(x,2))
+        newStrat[strat+".Beta"]=newStrat[strat+".Beta"].map(lambda x: max(x,0.5))
+    #***************************************************
+    #               MONTHLY REBALANCING BETA RATIO
+    #***************************************************
+
+    for strat in Contract_list:
+        newStrat[strat+".IndexBeta"]=100.0
+    newStrat['Rebal']=0
+    RebalIndex = 121
+    while newStrat.index[RebalIndex].month ==newStrat.index[RebalIndex-1].month:
+        RebalIndex+=1
+    RebalBeta= RebalIndex-1
+    iFirstDate=RebalIndex
+    rate =(newStrat[Rate][RebalIndex]+1)/(100*365)
+    
+    for k in range(RebalIndex+1,len(newStrat)):
+        if newStrat.index[k-1].month!=newStrat.index[k-2].month:
+            RebalIndex=k-1
+            RebalBeta=k-2
+            newStrat['Rebal'][k-1]=1
+            rate =(newStrat[Rate][k-1]+dBorrow)/(100*365)
+        for strat in Contract_list:
+ 
+            beta =newStrat[strat+".Beta"][RebalBeta]
+            perf = beta  * (newStrat[strat][k]/newStrat[strat][RebalIndex]-1)
+            
+            
+            borrow_cost=  min(0,1-beta)*rate*(newStrat.index[k]-newStrat.index[RebalIndex]).days#/newStrat[strat+".IndexBeta"][RebalIndex]
+            newStrat[strat+".IndexBeta"][k]=newStrat[strat+".IndexBeta"][RebalIndex]*(1-perf+ 0*borrow_cost)
+            
+    for strat in Contract_list:    
+        if strat!=Contract_list[0]:
+            del newStrat[strat]
+            del newStrat[strat+".Beta"]
+    del newStrat[Rate]
+    del newStrat[Index+".Vol"]
+    del newStrat["Days"] 
+    newStrat=newStrat[newStrat.index[iFirstDate]:newStrat.index[len(newStrat)-1]]
+    return newStrat    
+
+#**************************************
+#**    EQUAL EXPOSURE               ***
+#**************************************
+def Equal_Exposure(dfPrice,ContractList):
+    newStrat = dfPrice.copy()    
+    newStrat['Index']=100.0
+    coef = 1.0/len(ContractList)
+    for k in range(1,len(newStrat.index)):
+        perf = 0
+        dtToday=newStrat.index[k]
+        dtYesterday=newStrat.index[k-1]
+        for strat in ContractList:
+            perf+=coef*(newStrat.loc[dtToday,strat]/newStrat.loc[dtYesterday,strat]-1)
+        newStrat.loc[dtToday,'Index']   =newStrat.loc[dtYesterday,'Index']*(1+perf)
+    return  newStrat
+
+#**************************************
+#**             MOMENTUM            ***
+#************************************** 
+
+""" Daily,weekly,monthly or quaterly rebalancing
+    Selects the best performing strategy on the last observation period
+    Invests in the selected strategy until the end of the period
+"""
+
+def Momentum_Allocation(dfPrice,ContractList,Rebalancing_type,iObservation_period):
+    newStrat = dfPrice.copy()
+    newStrat['Rebal']=0
+    #REBALANCING MANAGEMENT 
+    if Rebalancing_type=="Daily" or Rebalancing_type=="daily":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1       
+    if Rebalancing_type=="Weekly" or Rebalancing_type=="weekly":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1
+                
+    if Rebalancing_type=="Monthly" or Rebalancing_type=="monthly":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1
+                
+    if Rebalancing_type=="Quaterly" or Rebalancing_type=="quaterly":
+        quaterly=[12,3,6,9]
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].month != newStrat.index[k-1].month:
+                if newStrat.index[k].month in quaterly:
+                    newStrat['Rebal'][k]=1
+                    
+    #MOMENTUM PART 
+
+    perf_vector={}
+    for k in range(0,len(ContractList)):
+        strat = ContractList[k] 
+        perf_vector[strat]=(newStrat[strat]/newStrat[strat].shift(iObservation_period)).shift(1).tolist()
+
+    dfMomentum=pd.DataFrame(index =newStrat.index)
+    for k in range(0,len(ContractList)):
+            strat = ContractList[k] 
+            dfMomentum[strat]=perf_vector[strat]
+            
+    dfMomentum=dfMomentum.dropna()
+    
+    dfStrategy1 = dfMomentum.idxmax(axis=1).tolist()
+    for i in range(0,len(dfStrategy1)):
+        dfMomentum[dfStrategy1[i]][i]=-100
+        
+    dfStrategy=pd.DataFrame({'Strategy1':dfStrategy1},index=dfMomentum.index)
+    
+    return dfStrategy
+    
+def Momentum_execute(dfPrice,ContractList,Rebalancing_type,iObservation_period):    
+    dfStrategy=Momentum_Allocation(dfPrice,ContractList,Rebalancing_type,iObservation_period)
+    newStrat = dfPrice.copy()
+    newStrat['Rebal']=0
+    #REBALANCING LANAGEMENT 
+    if Rebalancing_type=="Daily" or Rebalancing_type=="daily":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1       
+    if Rebalancing_type=="Weekly" or Rebalancing_type=="weekly":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1
+                
+    if Rebalancing_type=="Monthly" or Rebalancing_type=="monthly":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1
+                
+    if Rebalancing_type=="Quaterly" or Rebalancing_type=="quaterly":
+        quaterly=[12,3,6,9]
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].month != newStrat.index[k-1].month:
+                if newStrat.index[k].month in quaterly:
+                    newStrat['Rebal'][k]=1
+                    
+    #********************************************
+    #    INDEX CALCULUS
+    #********************************************
+    firstRebal = dfStrategy.index[0]
+    rebalDate = firstRebal
+    Strategy1 =dfStrategy.loc[rebalDate,'Strategy1']
+    newStrat=newStrat[newStrat.index>=rebalDate]   
+    newStrat['Strategy_selected']=Strategy1
+    newStrat['Index']=100.0
+    
+    for k in range(1,len(newStrat)):
+        dtToday = newStrat.index[k]
+        rebalDate= newStrat.index[k-1]
+        perf = newStrat.loc[dtToday, Strategy1]/newStrat.loc[rebalDate, Strategy1]-1
+        newStrat.loc[dtToday,'Index']= newStrat.loc[rebalDate,'Index']*(1+perf)
+        newStrat.loc[newStrat.index[k-1],'Strategy_selected']=Strategy1
+        if newStrat.loc[dtToday,'Rebal']==1:
+            rebalDate=dtToday
+            Strategy1 =dfStrategy.loc[rebalDate,'Strategy1']
+    return newStrat
+    
+
+#**************************************
+#**             RAINBOW             ***
+#************************************** 
+          
+
+def Rainbow_Allocation(dfPrice,ContractList,Rebalancing_type,iObservation_period,SelectionLength):
+    newStrat = dfPrice.copy()
+    newStrat['Rebal']=0
+    #REBALANCING MANAGEMENT 
+    if Rebalancing_type=="Daily" or Rebalancing_type=="daily":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1       
+    if Rebalancing_type=="Weekly" or Rebalancing_type=="weekly":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1
+                
+    if Rebalancing_type=="Monthly" or Rebalancing_type=="monthly":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1
+                
+    if Rebalancing_type=="Quaterly" or Rebalancing_type=="quaterly":
+        quaterly=[12,3,6,9]
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].month != newStrat.index[k-1].month:
+                if newStrat.index[k].month in quaterly:
+                    newStrat['Rebal'][k]=1
+                    
+    #MOMENTUM PART 
+
+    perf_vector={}
+    for k in range(0,len(ContractList)):
+        strat = ContractList[k] 
+        perf_vector[strat]=(newStrat[strat]/newStrat[strat].shift(iObservation_period)).shift(1).tolist()
+
+    dfMomentum=pd.DataFrame(index =newStrat.index)
+    for k in range(0,len(ContractList)):
+            strat = ContractList[k] 
+            dfMomentum[strat]=perf_vector[strat]
+            
+    dfMomentum=dfMomentum.dropna()
+    
+    dctStrategy={}
+    for k in range(0,SelectionLength):
+        dctStrategy[k]=dfMomentum.idxmax(axis=1).tolist()
+        for i in range(0,len(dctStrategy[k])):
+            dfMomentum[dctStrategy[k][i]][i]=-100
+    
+    dfStrategy=pd.DataFrame(index=dfMomentum.index)
+
+    for k in range(0,SelectionLength):
+        dfStrategy['Strategy'+str(k)]=dctStrategy[k]
+    return dfStrategy
+    
+    
+def Rainbow_execute(dfPrice,ContractList,Rebalancing_type,iObservation_period,RainbowCoef):    
+    SelectionLength=len(RainbowCoef)
+    dfStrategy=Rainbow_Allocation(dfPrice,ContractList,Rebalancing_type,iObservation_period,SelectionLength)
+    newStrat = dfPrice.copy()
+    newStrat['Rebal']=0
+    #REBALANCING LANAGEMENT 
+    if Rebalancing_type=="Daily" or Rebalancing_type=="daily":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1       
+    if Rebalancing_type=="Weekly" or Rebalancing_type=="weekly":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1
+                
+    if Rebalancing_type=="Monthly" or Rebalancing_type=="monthly":
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].day != newStrat.index[k-1].day:
+                newStrat['Rebal'][k]=1
+                
+    if Rebalancing_type=="Quaterly" or Rebalancing_type=="quaterly":
+        quaterly=[12,3,6,9]
+        for k in range(1,len(newStrat)):
+            if newStrat.index[k].month != newStrat.index[k-1].month:
+                if newStrat.index[k].month in quaterly:
+                    newStrat['Rebal'][k]=1
+                    
+    #********************************************
+    #    INDEX CALCULUS
+    #********************************************
+    firstRebal = dfStrategy.index[0]
+    rebalDate = firstRebal
+    dctStrategy={}
+    for i in range(0,SelectionLength):
+        dctStrategy[i]=dfStrategy.loc[rebalDate,'Strategy'+str(i)]
+
+    newStrat=newStrat[newStrat.index>=rebalDate]    
+    for i in range(0,SelectionLength):
+         newStrat["Strategy Selected "+ str(i)]=dfStrategy.loc[rebalDate,'Strategy'+str(i)]
+    newStrat['Index']=100.0
+    
+    for k in range(1,len(newStrat)):
+        dtToday = newStrat.index[k]
+        for i in range(0,SelectionLength):
+            newStrat.loc[newStrat.index[k-1],"Strategy Selected "+ str(i)]=dfStrategy.loc[rebalDate,'Strategy'+str(i)]
+        perf=0
+        for i in range(0,SelectionLength): 
+            strat = dctStrategy[i]
+            coef = RainbowCoef[i]
+            perf += coef*(newStrat.loc[dtToday,  strat]/newStrat.loc[rebalDate,  strat]-1)
+        newStrat.loc[dtToday,'Index']= newStrat.loc[rebalDate,'Index']*(1+perf)
+        if newStrat.loc[dtToday,'Rebal']==1:
+            rebalDate=dtToday
+            for i in range(0,SelectionLength):
+                dctStrategy[i]=dfStrategy.loc[rebalDate,'Strategy'+str(i)]
+    return newStrat    
+
+def Excess_Return(newStrat,Long,Short):    
+    calendar =Calendar(datetime.datetime(1990,1,1),datetime.datetime(2020,1,1)) 
+    newStrat['ExcessReturn']=100.0
+    
+    if newStrat.index[0] !=calendar.MonthFirstBusinessDay(newStrat.index[0]):
+        StrikeIndex=1
+        while newStrat.index[StrikeIndex].month  ==  newStrat.index[StrikeIndex-1].month:
+            StrikeIndex+=1
+    else:
+        StrikeIndex=0
+    iFirstDate=StrikeIndex
+    
+    for k in range(StrikeIndex+1,len(newStrat)):
+        perf =newStrat[Long][k]/newStrat[Long][StrikeIndex]-newStrat[Short][k]/newStrat[Short][StrikeIndex]
+        newStrat['ExcessReturn'][k]=newStrat['ExcessReturn'][StrikeIndex]*(1+perf)
+        if newStrat.index[k].month  !=  newStrat.index[k-1].month:
+            StrikeIndex=k
+    newStrat=newStrat[newStrat.index[iFirstDate]:newStrat.index[len(newStrat)-1]]
+    return newStrat
+    
+def Add_Long(newStrat,Long1,Long_added):    
+    calendar =Calendar(datetime.datetime(1990,1,1),datetime.datetime(2020,1,1)) 
+    newStrat['ExcessReturn']=100.0
+    
+    if newStrat.index[0] !=calendar.MonthFirstBusinessDay(newStrat.index[0]):
+        StrikeIndex=1
+        while newStrat.index[StrikeIndex].month  ==  newStrat.index[StrikeIndex-1].month:
+            StrikeIndex+=1
+    else:
+        StrikeIndex=0
+    iFirstDate=StrikeIndex
+    
+    for k in range(StrikeIndex+1,len(newStrat)):
+        perf =newStrat[Long1][k]/newStrat[Long1][StrikeIndex]+newStrat[Long_added][k]/newStrat[Long_added][StrikeIndex]-2
+        newStrat['ExcessReturn'][k]=newStrat['ExcessReturn'][StrikeIndex]*(1+perf)
+        if newStrat.index[k].month  !=  newStrat.index[k-1].month:
+            StrikeIndex=k
+    newStrat=newStrat[newStrat.index[iFirstDate]:newStrat.index[len(newStrat)-1]]
+    return newStrat
+         
+         
+def VaR(Return,weight,alpha):
+    Return.dropna()
+    perf=np.dot(Return,np.transpose(weight))
+    port_VaR=-np.percentile(perf,(1.0-alpha)*100.0)
+    return port_VaR
+
+def CVaR(Return,weight,alpha):
+    port_VaR=-VaR(Return,weight,alpha)
+    length=len(Return.index)
+    asset_num=len(Return.columns)
+    excess_return=np.dot(weight,np.transpose(Return.as_matrix()))-np.ones((1,length))*port_VaR
+    out_return=excess_return[excess_return<0]
+    port_CVaR=port_VaR+(1.0/length)*(1.0/(1.0-alpha))*sum(out_return)
+    return -port_CVaR
+    
+
+def CVaROptimization(ScenRets, R0, VaR0=None, beta=None,  UB=None, LB=None):
+#    %
+#    %
+#    % The function estimates the optimal portfolio weights that minimize CVaR
+#    % under a given target return R0
+#    %
+#    %INPUTS: ScenRets: Portfolio returns matrix
+#    %       R0: The target return
+#    %       beta:The confidence level between 0.9 and 0.999
+#    %       LB, UB the upper and lower bound for the optimal weights. For example If
+#    %       you imput UB=.25 none of the stocks can consist more than the 25% of the
+#    %       portfolio. 
+#    %       VaR0= the initial guess for the portfolio VaR
+#    %
+#    %OUTPUTS: fval = CVaR of the optimal portfolio
+#    %         w= the weights of the optimal portfolio, The last element in w
+#    %         equals the VaR of the optimal portfolio
+#    %
+#    %---------------- INPUT ARGUMENTS--------------------------------------
+#    % The function accepts 6 imputs however only the two first are required
+#    % If you dont supply the 6 argument then LB=0 (no short positions)
+#    % If you dont supply the 5 argument then UB=1
+#    % If you dont supply the 4 argument then beta=0.95
+#    % If you dont supply the 3 argument VaR0 equals the HS VaR of the equally weighted portfolio
+
+    J=len(ScenRets.index)
+    nAssets=len(ScenRets.columns)
+    w0=(1/nAssets)*np.ones((1,nAssets))
+    if LB is None:
+        LB=0.0;
+    if UB is None:
+        UB=1.0;
+    if beta is None:
+       beta=0.95;
+    if VaR0 is None:
+       VaR0=VaR(ScenRets,w0,beta);
+    if beta>1 or beta<0.9:
+        print('The confidence level beta = 1 - alpha, should be in (0.9 0.99)')
+    if LB>=UB:
+        print('The LB has to be smaller than UB')
+    if UB>1:
+        print('The upper bound should be less than 1')
+    if LB<-1:
+        print('The lower bound should be greater than -1')
+
+    i=range(1,nAssets)
+    
+#    % the objective function
+    cons=({'type': 'eq', 'fun': lambda x: 1 - sum(x)},
+           {'type':'ineq','fun':lambda x: np.dot(x,np.transpose(np.array(ScenRets.mean(0))))-R0})
+    bds=[]
+    for i in range(0,nAssets):
+        bds.append((0.000000000000001,None))
+    initial_value= np.ones((1,nAssets),dtype=np.float)*(1.0/nAssets)
+
+    result =scipy.optimize.minimize(lambda x:CVaR(ScenRets,x,beta), x0=initial_value,constraints=cons,bounds=bds).x
+    optimal_weights=[]
+    for i in range(0,len(result)):
+        optimal_weights.append(float(result[i]))
+
+    return optimal_weights

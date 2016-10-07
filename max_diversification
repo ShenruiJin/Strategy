@@ -1,0 +1,482 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Oct 05 13:01:42 2016
+
+@author: sjin
+"""
+
+import pandas as pd
+import sqlite3
+import datetime
+import numpy as np
+import os
+import sqlite3
+import matplotlib.pyplot as plt
+#**********************************
+# IMPORT US STRUCTURING LIBRAIRIES
+#**********************************
+DataBase_path = r'H:\Local_Code\Database'
+Prism_path = r'H:\Local_Code\Database\PrismRequest'
+os.chdir(r'H:\Local_Code')
+
+import class_CalendarUS
+from DB_functions import *
+from class_Strategy import *
+from PortfolioAllocation import *
+
+
+(sharpe,weights_pd,Strat,newStrat_price)=CVaR_Strategy(newStrat1[newStrat1.columns[[0,1,4,10,14]]],"monthly","low",1,40,6,23,0.1,0.01*i)
+
+
+#######################################################################
+newStrat1=pd.read_csv(r"H:\Desktop\diver_data48_largeuniverse.csv")
+newStrat1.index=newStrat1['Date'].map(lambda x: datetime.datetime.strptime(x,"%m/%d/%Y"))
+del newStrat1['Date']
+
+for i in newStrat1.columns:  
+    pd_etf=pd.DataFrame({i:newStrat1[i]})
+    newStrat1[i]=beta_adjusted(pd_etf)
+
+newStrat1=newStrat1.dropna()    
+newStrat_copy=newStrat1.copy()
+
+
+month_list={1:31,2:28,3:31,4:30,5:31,6:30,7:31,8:31,9:30,10:31,11:30,12:31}
+decay=0.97
+HighLow=1
+vol_day=38
+top_amount=0
+max_sharpe=-1000
+global_sharpe=-10000
+ticker_list1=[]
+ii=0
+day_delay=2
+day_return=23
+for kk in range(37,38):
+    for ii in range(0,1):
+        for jj in range(3,4):
+            print kk,ii,jj
+            newStrat1=newStrat_copy.copy()
+#            for t in ticker_list1:
+#                del newStrat1[t]
+            newStrat=newStrat1
+#            ticker_delete=newStrat.columns[ii]
+            #del newStrat[newStrat.columns[ii]]
+            Amount_Top=len(newStrat.columns)-1
+            newStrat_price=pd.DataFrame(columns=['newStrat'])
+            newStrat_price.loc[0]=100.0
+            rebalance_index=vol_day-30
+            diver_ratio=pd.DataFrame(columns=['ratio'])
+            date_series=[]
+            rebalance_time=0
+            for i in range(vol_day+day_delay,len(newStrat)):
+                if (i==vol_day+day_delay):
+                    month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+#                    ticker_index=two_side_filter(month_return,top_amount,"low")[1]
+                    ticker_list=newStrat.columns    
+                    underlying_price=pd.DataFrame()
+                    for j in ticker_list:
+                        underlying_price[j]=newStrat[j]
+                    underlying_price.index=newStrat.index
+                    rebalance_index=i        
+                    cov_matrix=Covariance_matrix2(underlying_price.index[i-day_delay],underlying_price,vol_day,decay)
+                    weight=np.array(Min_Def_Ratio(cov_matrix))
+#                    weights.loc[i-vol_day-day_delay+1]=weight
+                    newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(underlying_price.loc[underlying_price.index[i]]/underlying_price.loc[underlying_price.index[i-1]]-1)))
+                    date_series.append(underlying_price.index[i])
+                elif (newStrat.index[i].month!=newStrat.index[i-1].month):
+                    month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+#                    ticker_index=two_side_filter(month_return,top_amount,"low")[1]
+                    ticker_list=newStrat.columns         
+                    underlying_price=pd.DataFrame()
+                    for j in ticker_list:
+                        underlying_price[j]=newStrat[j]
+                    underlying_price.index=newStrat.index       
+                    cov_matrix=Covariance_matrix2(underlying_price.index[i-day_delay],underlying_price,vol_day,decay)
+                    weight_pot=np.array(Min_Def_Ratio(cov_matrix))
+                    if sum(abs(weight_pot-weight)>(0*0.025))>0:
+                        cost=sum(abs(weight-weight_pot)*underlying_price.loc[underlying_price.index[i-1]]/underlying_price.loc[underlying_price.index[rebalance_index-1]])*0.0002*newStrat_price.loc[rebalance_index-vol_day-day_delay]/newStrat_price.loc[i-vol_day-day_delay]
+                        weight=weight_pot
+                        newStrat_price.loc[i-vol_day-day_delay+1]=(1-cost)*newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(underlying_price.loc[underlying_price.index[i]]/underlying_price.loc[underlying_price.index[i-1]]-1)))
+                        rebalance_index=i
+                        rebalance_time+=1
+                    else:
+                        newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(underlying_price.loc[underlying_price.index[i]]/underlying_price.loc[underlying_price.index[rebalance_index-1]]-1)))               
+                    date_series.append(underlying_price.index[i])
+                    #ticker_data.loc[i-vol_day]=ticker_list
+#                    weights.loc[i-vol_day-day_delay+1]=weight
+                else:
+                    newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(underlying_price.loc[underlying_price.index[i]]/underlying_price.loc[underlying_price.index[rebalance_index-1]]-1)))
+#                    weights.loc[i-vol_day-day_delay+1]=weight
+            
+            newStrat_price.index=newStrat.index[vol_day+day_delay-1:]
+#            weights.index=newStrat.index[vol_day+day_delay:]
+            Strat=Strategy(newStrat_price.index,newStrat_price['newStrat'])
+            print ticker_delete
+            sharpe_temp=Strat.Sharpe()
+            print sharpe_temp
+            print rebalance_time
+            if sharpe_temp>max_sharpe:
+                max_sharpe=sharpe_temp
+                max_ticker=ticker_delete
+        if max_sharpe>global_sharpe:
+            global_sharpe=max_sharpe
+            ticker_list1.append(max_ticker)
+            print max_sharpe
+        else:
+#            break
+            pass
+
+
+newStrat1=pd.read_csv(r"H:\Desktop\diver_data18.csv")
+newStrat1.index=newStrat1['Date'].map(lambda x: datetime.datetime.strptime(x,"%m/%d/%Y"))
+del newStrat1['Date']
+for i in newStrat1.columns:  
+    pd_etf=pd.DataFrame({i:newStrat1[i]})   
+    newStrat1[i]=beta_adjusted(pd_etf)
+newStrat1=newStrat1.dropna()    
+
+result=pd.DataFrame(columns=["i","j","k","m","n","a","sharpe"])
+num=0
+#for i in range(0,8):
+#    for j in range(10,15):
+#        for k in range(15,22):
+#            for m in range(22,33):
+#                for n in range(33,40):
+#                    for a in range(40,44):
+for i in range(90,91):
+#    (sharpe,weights_pd,Strat,newStrat_price)=MDS(newStrat1[newStrat1.columns[[0,1,4,10,14]]],"monthly","low",1,40,6,23,0.1,0.92,0.01*i)
+    (sharpe,weights_pd,Strat,newStrat_price)=Maximum_Diverisification_Strategy(newStrat1,"monthly","low",1,40,6,23,0.1,0.92,0.01*i)
+    Strat.Describe()
+excess_return=beta_adjusted(newStrat_price)
+Strat=Strategy(excess_return.index,excess_return)
+
+for i in range(0,4):
+    (sharpe,weights_pd,Strat,newStrat_price)=CVaR_Strategy(newStrat1,"weekly","low",1,40,6,23,0.1,0.01*i)
+    Strat.Describe()
+
+#result.loc[num]=np.array([i,j,k,m,n,a,sharpe])
+#num=num+1
+
+for i in range(0,4):
+    (sharpe,weights_pd,Strat,newStrat_price)=Sharpe_Strategy(newStrat1,"weekly","low",1,40,6,23,0.1,0.01*i,0.1)
+    Strat.Describe()
+
+for i in range(0,4):
+    (sharpe,weights_pd,Strat,newStrat_price)=Vol_Over_Sharpe_Strategy(newStrat1,"weekly","low",1,40,6,23,0.1,0.01*i,0.1,0.92)
+    Strat.Describe()
+
+def Maximum_Diverisification_Strategy(newStrat,Rebalancing_type,MomentumType,Amount_Top,vol_day,day_delay,day_return,threshold,decay,stop_loss):
+    newStrat_price=pd.DataFrame(columns=['newStrat'])
+    newStrat_price.loc[0]=100.0
+    rebalance_index=vol_day-30
+    rebalance_time=0
+    weights_pd=pd.DataFrame(columns=["w" + str(i) for i in range(1,len(newStrat.columns)+1)])
+
+    rebalance_type=0
+    if Rebalancing_type=="monthly" or Rebalancing_type=="Monthly" :
+        rebalance_type=3
+    elif Rebalancing_type=="Quarterly" or Rebalancing_type=="quarterly" :
+        rebalance_type=4
+    elif Rebalancing_type=="Weekly" or Rebalancing_type=="weekly" :
+        rebalance_type=2
+    elif Rebalancing_type=="Daily" or Rebalancing_type=="daily" :
+        rebalance_type=1   
+    
+    for i in range(vol_day+day_delay,len(newStrat)):
+        if (i==vol_day+day_delay):
+            month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+            ticker_index=np.sort(two_side_filter(month_return,Amount_Top,MomentumType)[1])
+            weight=MD_weight_calculation(i,newStrat,ticker_index,vol_day,decay,day_delay)
+            rebalance_index=i
+            newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[i-1]]-1)))
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+        elif (rebalance_type==1 and newStrat.index[i].day!=newStrat.index[i-1].day) or (rebalance_type==2 and newStrat.index[i].week!=newStrat.index[i-1].week) or (rebalance_type==3 and newStrat.index[i].month!=newStrat.index[i-1].month) or (rebalance_type==4 and newStrat.index[i].month!=newStrat.index[i-1].month and newStrat.index[i].month%3==0) :
+            month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+            ticker_index=np.sort(two_side_filter(month_return,Amount_Top,MomentumType)[1])
+            if (newStrat_price.loc[i-vol_day-day_delay]/newStrat_price.loc[rebalance_index-vol_day-day_delay])[0]<(1-stop_loss):
+                weight_pot=np.zeros(len(newStrat.columns))
+            else:
+                weight_pot=MD_weight_calculation(i,newStrat,ticker_index,vol_day,decay,day_delay)
+            if sum(abs(weight_pot-weight)>(threshold))>0:
+                cost=0
+                #cost=sum(abs(weight-weight_pot)*newStrat.loc[newStrat.index[i-1]]/newStrat.loc[newStrat.index[rebalance_index-1]])*0.0002*newStrat_price.loc[rebalance_index-vol_day-day_delay]/newStrat_price.loc[i-vol_day-day_delay]
+                weight=weight_pot
+                newStrat_price.loc[i-vol_day-day_delay+1]=(1-cost)*newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[i-1]]-1)))
+                rebalance_index=i
+                rebalance_time+=1
+            else:
+                newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[rebalance_index-1]]-1)))               
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+        else:
+            newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[rebalance_index-1]]-1)))
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+
+    newStrat_price.index=newStrat.index[vol_day+day_delay-1:]
+    weights_pd.index=newStrat.index[vol_day+day_delay:]
+    Strat=Strategy(newStrat_price.index,newStrat_price['newStrat'])
+    sharpe_temp=Strat.Sharpe()
+    return (sharpe_temp,weights_pd,Strat,newStrat_price)
+
+
+def CVaR_Strategy(newStrat,Rebalancing_type,MomentumType,Amount_Top,vol_day,day_delay,day_return,threshold,stop_loss,target):
+    newStrat_price=pd.DataFrame(columns=['newStrat'])
+    newStrat_price.loc[0]=100.0
+    rebalance_index=vol_day-30
+    rebalance_time=0
+    weights_pd=pd.DataFrame(columns=["w" + str(i) for i in range(1,len(newStrat.columns)+1)])
+
+    rebalance_type=0
+    if Rebalancing_type=="monthly" or Rebalancing_type=="Monthly" :
+        rebalance_type=3
+    elif Rebalancing_type=="Quarterly" or Rebalancing_type=="quarterly" :
+        rebalance_type=4
+    elif Rebalancing_type=="Weekly" or Rebalancing_type=="weekly" :
+        rebalance_type=2
+    elif Rebalancing_type=="Daily" or Rebalancing_type=="daily" :
+        rebalance_type=1   
+    
+    for i in range(vol_day+day_delay,len(newStrat)):
+        if (i==vol_day+day_delay):
+            month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+            ticker_index=np.sort(two_side_filter(month_return,Amount_Top,MomentumType)[1])
+            weight=CVaR_weight(i,newStrat,ticker_index,vol_day,target)
+            rebalance_index=i
+            newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[i-1]]-1)))
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+        elif (rebalance_type==1 and newStrat.index[i].day!=newStrat.index[i-1].day) or (rebalance_type==2 and newStrat.index[i].week!=newStrat.index[i-1].week) or (rebalance_type==3 and newStrat.index[i].month!=newStrat.index[i-1].month) or (rebalance_type==4 and newStrat.index[i].month!=newStrat.index[i-1].month and newStrat.index[i].month%3==0) :
+            month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+            ticker_index=np.sort(two_side_filter(month_return,Amount_Top,MomentumType)[1])
+            if (newStrat_price.loc[i-vol_day-day_delay]/newStrat_price.loc[rebalance_index-vol_day-day_delay])[0]<(1-stop_loss):
+                weight_pot=np.zeros(len(newStrat.columns))
+            else:
+                weight_pot=CVaR_weight(i,newStrat,ticker_index,vol_day,target)
+            if sum(abs(weight_pot-weight)>(threshold))>0:
+                cost=0
+                #cost=sum(abs(weight-weight_pot)*newStrat.loc[newStrat.index[i-1]]/newStrat.loc[newStrat.index[rebalance_index-1]])*0.0002*newStrat_price.loc[rebalance_index-vol_day-day_delay]/newStrat_price.loc[i-vol_day-day_delay]
+                weight=weight_pot
+                newStrat_price.loc[i-vol_day-day_delay+1]=(1-cost)*newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[i-1]]-1)))
+                rebalance_index=i
+                rebalance_time+=1
+            else:
+                newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[rebalance_index-1]]-1)))               
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+        else:
+            newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[rebalance_index-1]]-1)))
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+
+    newStrat_price.index=newStrat.index[vol_day+day_delay-1:]
+    weights_pd.index=newStrat.index[vol_day+day_delay:]
+    Strat=Strategy(newStrat_price.index,newStrat_price['newStrat'])
+    sharpe_temp=Strat.Sharpe()
+    return (sharpe_temp,weights_pd,Strat,newStrat_price)
+
+
+def Sharpe_Strategy(newStrat,Rebalancing_type,MomentumType,Amount_Top,vol_day,day_delay,day_return,threshold,stop_loss,LB):
+    newStrat_price=pd.DataFrame(columns=['newStrat'])
+    newStrat_price.loc[0]=100.0
+    rebalance_index=vol_day-30
+    rebalance_time=0
+    weights_pd=pd.DataFrame(columns=["w" + str(i) for i in range(1,len(newStrat.columns)+1)])
+
+    rebalance_type=0
+    if Rebalancing_type=="monthly" or Rebalancing_type=="Monthly" :
+        rebalance_type=3
+    elif Rebalancing_type=="Quarterly" or Rebalancing_type=="quarterly" :
+        rebalance_type=4
+    elif Rebalancing_type=="Weekly" or Rebalancing_type=="weekly" :
+        rebalance_type=2
+    elif Rebalancing_type=="Daily" or Rebalancing_type=="daily" :
+        rebalance_type=1   
+    
+    for i in range(vol_day+day_delay,len(newStrat)):
+        if (i==vol_day+day_delay):
+            month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+            ticker_index=np.sort(two_side_filter(month_return,Amount_Top,MomentumType)[1])
+            weight=Sharpe_weight_Calculation(i,newStrat,ticker_index,vol_day,LB)
+            rebalance_index=i
+            newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[i-1]]-1)))
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+        elif (rebalance_type==1 and newStrat.index[i].day!=newStrat.index[i-1].day) or (rebalance_type==2 and newStrat.index[i].week!=newStrat.index[i-1].week) or (rebalance_type==3 and newStrat.index[i].month!=newStrat.index[i-1].month) or (rebalance_type==4 and newStrat.index[i].month!=newStrat.index[i-1].month and newStrat.index[i].month%3==0) :
+            month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+            ticker_index=np.sort(two_side_filter(month_return,Amount_Top,MomentumType)[1])
+            if (newStrat_price.loc[i-vol_day-day_delay]/newStrat_price.loc[rebalance_index-vol_day-day_delay])[0]<(1-stop_loss):
+                weight_pot=np.zeros(len(newStrat.columns))
+            else:
+                weight_pot=Sharpe_weight_Calculation(i,newStrat,ticker_index,vol_day,LB)
+                print weight_pot
+            if sum(abs(weight_pot-weight)>(threshold))>0:
+                cost=0
+                #cost=sum(abs(weight-weight_pot)*newStrat.loc[newStrat.index[i-1]]/newStrat.loc[newStrat.index[rebalance_index-1]])*0.0002*newStrat_price.loc[rebalance_index-vol_day-day_delay]/newStrat_price.loc[i-vol_day-day_delay]
+                weight=weight_pot
+                newStrat_price.loc[i-vol_day-day_delay+1]=(1-cost)*newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[i-1]]-1)))
+                rebalance_index=i
+                rebalance_time+=1
+            else:
+                newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[rebalance_index-1]]-1)))               
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+        else:
+            newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[rebalance_index-1]]-1)))
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+
+    newStrat_price.index=newStrat.index[vol_day+day_delay-1:]
+    weights_pd.index=newStrat.index[vol_day+day_delay:]
+    Strat=Strategy(newStrat_price.index,newStrat_price['newStrat'])
+    sharpe_temp=Strat.Sharpe()
+    return (sharpe_temp,weights_pd,Strat,newStrat_price)
+
+
+def Vol_Over_Sharpe_Strategy(newStrat,Rebalancing_type,MomentumType,Amount_Top,vol_day,day_delay,day_return,threshold,stop_loss,LB,decay):
+    newStrat_price=pd.DataFrame(columns=['newStrat'])
+    newStrat_price.loc[0]=100.0
+    rebalance_index=vol_day-30
+    rebalance_time=0
+    weights_pd=pd.DataFrame(columns=["w" + str(i) for i in range(1,len(newStrat.columns)+1)])
+
+    rebalance_type=0
+    if Rebalancing_type=="monthly" or Rebalancing_type=="Monthly" :
+        rebalance_type=3
+    elif Rebalancing_type=="Quarterly" or Rebalancing_type=="quarterly" :
+        rebalance_type=4
+    elif Rebalancing_type=="Weekly" or Rebalancing_type=="weekly" :
+        rebalance_type=2
+    elif Rebalancing_type=="Daily" or Rebalancing_type=="daily" :
+        rebalance_type=1   
+    
+    for i in range(vol_day+day_delay,len(newStrat)):
+        if (i==vol_day+day_delay):
+            month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+            ticker_index=np.sort(two_side_filter(month_return,Amount_Top,MomentumType)[1])
+            weight=Vol_Over_Sharpe_weight_Calculation(i,newStrat,ticker_index,vol_day,LB,decay)
+            rebalance_index=i
+            newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[i-1]]-1)))
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+        elif (rebalance_type==1 and newStrat.index[i].day!=newStrat.index[i-1].day) or (rebalance_type==2 and newStrat.index[i].week!=newStrat.index[i-1].week) or (rebalance_type==3 and newStrat.index[i].month!=newStrat.index[i-1].month) or (rebalance_type==4 and newStrat.index[i].month!=newStrat.index[i-1].month and newStrat.index[i].month%3==0) :
+            month_return=np.array(newStrat.loc[newStrat.index[i-2]]/newStrat.loc[newStrat.index[i-day_return]])
+            ticker_index=np.sort(two_side_filter(month_return,Amount_Top,MomentumType)[1])
+            if (newStrat_price.loc[i-vol_day-day_delay]/newStrat_price.loc[rebalance_index-vol_day-day_delay])[0]<(1-stop_loss):
+                weight_pot=np.zeros(len(newStrat.columns))
+            else:
+                weight_pot=Vol_Over_Sharpe_weight_Calculation(i,newStrat,ticker_index,vol_day,LB,decay)
+                print weight_pot
+            if sum(abs(weight_pot-weight)>(threshold))>0:
+                cost=0
+                #cost=sum(abs(weight-weight_pot)*newStrat.loc[newStrat.index[i-1]]/newStrat.loc[newStrat.index[rebalance_index-1]])*0.0002*newStrat_price.loc[rebalance_index-vol_day-day_delay]/newStrat_price.loc[i-vol_day-day_delay]
+                weight=weight_pot
+                newStrat_price.loc[i-vol_day-day_delay+1]=(1-cost)*newStrat_price.loc[i-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[i-1]]-1)))
+                rebalance_index=i
+                rebalance_time+=1
+            else:
+                newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[rebalance_index-1]]-1)))               
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+        else:
+            newStrat_price.loc[i-vol_day-day_delay+1]=newStrat_price.loc[rebalance_index-vol_day-day_delay]*(1+np.dot(weight,(newStrat.loc[newStrat.index[i]]/newStrat.loc[newStrat.index[rebalance_index-1]]-1)))
+            weights_pd.loc[i-vol_day-day_delay+1]=weight
+
+    newStrat_price.index=newStrat.index[vol_day+day_delay-1:]
+    weights_pd.index=newStrat.index[vol_day+day_delay:]
+    Strat=Strategy(newStrat_price.index,newStrat_price['newStrat'])
+    sharpe_temp=Strat.Sharpe()
+    return (sharpe_temp,weights_pd,Strat,newStrat_price)
+
+
+def Vol_Over_Sharpe(price,weight,decay_var):
+    cov_matrix=Covariance_matrix2(price.index[-1],price,len(price)-1,decay_var)
+    vol=np.dot(np.transpose(weight),(np.diagonal(cov_matrix)**0.5))
+    sharpe=Sharpe_Calculator(price,weight)
+    return vol/sharpe
+
+def Vol_Over_Sharpe_Optimization(newStrat,LB,decay_var):
+    cons=({'type': 'eq', 'fun': lambda x:  1 - sum(x)})
+   
+    #equality constraint 
+    bds=[]
+    for i in range(0,len(newStrat.columns)):
+        bds.append((LB,None))
+
+    #set initial value
+    initial_value= np.ones((len(newStrat.columns),1),dtype=np.float)*1.0/len(newStrat.columns)
+    
+    result =scipy.optimize.minimize(lambda x:Vol_Over_Sharpe(newStrat,x,decay_var), x0=initial_value,constraints=cons,bounds=bds).x
+    optimal_weights=[]
+    for i in range(0,len(result)):
+        optimal_weights.append(float(result[i]))
+    return optimal_weights
+    
+def Vol_Over_Sharpe_weight_Calculation(i,newStrat,ticker_index,period_day,LB,decay_var):
+    weight=np.zeros(len(newStrat.columns))
+    ticker_list=newStrat.columns[ticker_index]      
+    underlying_price=pd.DataFrame()
+    for j in ticker_list:
+        underlying_price[ticker_list]=newStrat[ticker_list]
+    underlying_price.index=newStrat.index
+    weight[ticker_index]=Vol_Over_Sharpe_Optimization(underlying_price.loc[underlying_price.index[range(i-period_day,i)]],LB,decay_var)    
+    return weight
+
+
+def CVaR_weight(i,newStrat,ticker_index,period_day,target):
+    weight=np.zeros(len(newStrat.columns))
+    ticker_list=newStrat.columns[ticker_index]      
+    underlying_price=pd.DataFrame()
+    for j in ticker_list:
+        underlying_price[ticker_list]=newStrat[ticker_list]
+    underlying_price.index=newStrat.index
+    ret=underlying_price.loc[underlying_price.index[range(i-period_day,i)]].pct_change()
+    ret.dropna()
+    weight[ticker_index]=CVaROptimization(ret, target/250)
+    return weight
+    
+def return_calculator(price,weight):
+    newStrat=pd.DataFrame(columns=['newStrat'])
+    newStrat.loc[0]=100.0
+    for i in range(1,len(price.index)):
+        newStrat.loc[i]=newStrat.loc[0]*weight.dot(price.loc[price.index[i]]/price.loc[price.index[0]])
+    newStrat.index=price.index
+    return newStrat
+    
+def Sharpe_Calculator(price,weight):
+    newStrat=return_calculator(price,weight)
+    dfin=newStrat.index[len(newStrat)-1]
+    ddebut= newStrat.index[0]
+    days = (dfin-ddebut).days
+    Irr= (newStrat.loc[newStrat.index[len(newStrat)-1],'newStrat']/newStrat.loc[newStrat.index[0],'newStrat'])**(365.0/days)-1        
+    vol=np.log(newStrat['newStrat'].pct_change()+1).std()*np.sqrt(252)
+    return Irr/(vol)
+
+def SharpeOptimization(newStrat,LB):
+    cons=({'type': 'eq', 'fun': lambda x:  1 - sum(x)})
+   
+    #equality constraint 
+    bds=[]
+    for i in range(0,len(newStrat.columns)):
+        bds.append((LB,None))
+
+    #set initial value
+    initial_value= np.ones((len(newStrat.columns),1),dtype=np.float)*1.0/len(newStrat.columns)
+    
+    result =scipy.optimize.minimize(lambda x:-Sharpe_Calculator(newStrat,x), x0=initial_value,constraints=cons,bounds=bds).x
+    optimal_weights=[]
+    for i in range(0,len(result)):
+        optimal_weights.append(float(result[i]))
+    return optimal_weights
+
+def Sharpe_weight_Calculation(i,newStrat,ticker_index,period_day,LB):
+    weight=np.zeros(len(newStrat.columns))
+    ticker_list=newStrat.columns[ticker_index]      
+    underlying_price=pd.DataFrame()
+    for j in ticker_list:
+        underlying_price[ticker_list]=newStrat[ticker_list]
+    underlying_price.index=newStrat.index
+    weight[ticker_index]=SharpeOptimization(underlying_price.loc[underlying_price.index[range(i-period_day,i)]],LB)    
+    return weight
+
+def MD_weight_calculation(i,newStrat,ticker_index,vol_day,decay,day_delay):
+    weight=np.zeros(len(newStrat.columns))
+    ticker_list=newStrat.columns[ticker_index]    
+    underlying_price=pd.DataFrame()
+    for j in ticker_list:
+        underlying_price[ticker_list]=newStrat[ticker_list]
+    underlying_price.index=newStrat.index
+    cov_matrix=Covariance_matrix2(underlying_price.index[i-day_delay],underlying_price,vol_day,decay)
+    weight[ticker_index]=np.array(Min_Def_Ratio(cov_matrix))
+    return weight

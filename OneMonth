@@ -1,0 +1,164 @@
+
+
+import numpy as np
+import pandas as pd
+import datetime
+import os
+os.chdir(r'K:\ED_ExcelTools\Transfert\Structuring\Proprietary Indices\Python Script\US Structuring Libraries')
+from class_CalendarUS import Calendar
+from class_CalendarUS import Date
+
+
+def shortTerm():
+    path = r'C:\Users\sjin\Desktop\Price Fresh\VolDataUS_2016-10-06.csv' 
+    data = pd.read_csv(path)
+    data.columns = ['dates','UX1','UX2','UX3']
+    data['dates'] = data['dates'].apply(lambda x: datetime.datetime.strptime(x,'%d/%m/%Y'))
+    calendar = Calendar(data['dates'][0],data['dates'][len(data)-1])
+    
+    
+    # Generate the Calendar of Futures settlement
+    # Note : <= 2004 rules were not fully respected
+    # Each month, the future settlement days is 30 calendar days 
+    # before the 3rd friday of the next month
+    VIXCalendar = Calendar(data['dates'][0],data['dates'][len(data)-1])
+    VIXCalendar.VIXSettlement = []
+    VIXCalendar.VIXLastTrading = []
+    #For each year
+    for year in range(VIXCalendar.start.year-1,VIXCalendar.end.year+2):
+        #There is a settlement date each month
+        for month in range(1,13):
+            #We select the 3rd friday of the next month
+            tmp = Date.occurenceOfDayOfMonth(3,4,month, year)
+            #If it's not a business day, we select the preceding business day
+            if (VIXCalendar.isBusinessDay(tmp) != True):
+                tmp = VIXCalendar.addBusinessDays(-1,tmp)
+            
+            # Future settlement day is 30 days before
+            tmp = tmp +datetime.timedelta(days=-30)
+            # If it's not a business day, we select the preceding business day
+            if (VIXCalendar.isBusinessDay(tmp) != True):
+                tmp = VIXCalendar.addBusinessDays(-1,tmp)
+            
+            
+            #We add the settlement date to our list            
+            VIXCalendar.VIXSettlement.append(tmp)
+
+            # The last trading date is one day before the settlement
+            # date before november 2014. after november 2014 it's the same day   
+            if (tmp >= datetime.datetime(2014,11,1)):
+                tmpLastTrading = tmp
+            else:
+                tmpLastTrading = VIXCalendar.addBusinessDays(-1,tmp)
+            
+            VIXCalendar.VIXLastTrading.append(tmpLastTrading)
+    
+    
+    VIXCalendar.VIXSettlementPrev = []
+    for date in VIXCalendar.VIXSettlement:
+        VIXCalendar.VIXSettlementPrev.append(VIXCalendar.addBusinessDays(-1,date))
+    
+    #Date of beginning of roll period
+    data['beginRollPeriod'] = data['dates'][0]
+    #Date of end
+    data['endRollPeriod'] = data['dates'][0]
+    #Cf. report
+    data['Pi'] = float('NaN')
+    data['CW_1'] = float('NaN')
+    data['CW_2'] = float('NaN')
+    data['TDAO'] = float('NaN')
+    data['TDAP'] = float('NaN')
+    
+    #We select the first settlement date that is before our first historical price date
+    indexVIXSettlement = 0
+    while(data['dates'][0] > VIXCalendar.VIXLastTrading[indexVIXSettlement]):
+        indexVIXSettlement += 1
+        
+    indexVIXSettlement -= 1
+    
+    #We compute the periods and weights
+    for i in range(0, len(data)):
+        if (data['dates'][i] > VIXCalendar.VIXLastTrading[indexVIXSettlement+1]):
+            indexVIXSettlement += 1
+        data['beginRollPeriod'][i] = VIXCalendar.VIXSettlement[indexVIXSettlement]
+        data['endRollPeriod'][i] = VIXCalendar.VIXSettlement[indexVIXSettlement+1]
+
+    for i in range(0,len(data)):
+        if(data['dates'][i] in  VIXCalendar.VIXLastTrading):              
+            T =  calendar.nbBusinessDaysBetweenTwoDates(data['beginRollPeriod'][i+1],data['endRollPeriod'][i+1])-1
+            dt = calendar.nbBusinessDaysBetweenTwoDates(VIXCalendar.addBusinessDays(1, data['dates'][i]),data['endRollPeriod'][i+1])-1
+                
+            data['CW_1'][i] = 100.0 * dt/T
+            data['CW_2'][i] = 100.0 - 100.0 * dt/T
+        else:
+            T =  calendar.nbBusinessDaysBetweenTwoDates(data['beginRollPeriod'][i],data['endRollPeriod'][i])-1
+            dt = calendar.nbBusinessDaysBetweenTwoDates(VIXCalendar.addBusinessDays(1, data['dates'][i]),data['endRollPeriod'][i])-1
+                
+            data['CW_1'][i] = 100.0 * dt/T
+            data['CW_2'][i] = 100.0 - 100.0 * dt/T
+
+
+    cost = -0.05        
+    data['strat'] = 100.0
+    data['Q1'] = float('NaN')
+    data['Q2'] = float('NaN')
+    data['Q1_prev'] = float('NaN')
+    data['Q2_prev'] = float('NaN')
+    for i in range(2, len(data)):
+        if (data['dates'][i-1] in VIXCalendar.VIXLastTrading):
+            Q1 = data['CW_1'][i-1] / (data['CW_1'][i-1] * data['UX2'][i-1] + data['CW_2'][i-1] * data['UX3'][i-1])            
+            Q2 = data['CW_2'][i-1] / (data['CW_1'][i-1] * data['UX2'][i-1] + data['CW_2'][i-1] * data['UX3'][i-1])    
+            
+            if (i==2):
+                Q1_prev = 0
+                Q2_prev = 0
+            else:
+                Q1_prev = data['CW_1'][i-2] / (data['CW_1'][i-2] * data['UX1'][i-2] + data['CW_2'][i-2] * data['UX2'][i-2])            
+                Q2_prev = data['CW_2'][i-2] / (data['CW_1'][i-2] * data['UX1'][i-2] + data['CW_2'][i-2] * data['UX2'][i-2])    
+                
+            data['strat'][i] = data['strat'][i-1] * (1.0 + Q1_prev * (data['UX1'][i] - data['UX2'][i-1])
+                                                         + (Q1 - Q1_prev) * (data['UX1'][i] - (data['UX2'][i-1] + np.sign(Q1 - Q1_prev)*0.5*cost))
+                                                         + Q2_prev * (data['UX2'][i] - data['UX3'][i-1])
+                                                         + (Q2 - Q2_prev) * (data['UX2'][i] - (data['UX3'][i-1] + np.sign(Q2 - Q2_prev)*0.5*cost)))
+        elif (data['dates'][i-2] in VIXCalendar.VIXLastTrading):
+            Q1 = data['CW_1'][i-1] / (data['CW_1'][i-1] * data['UX1'][i-1] + data['CW_2'][i-1] * data['UX2'][i-1])            
+            Q2 = data['CW_2'][i-1] / (data['CW_1'][i-1] * data['UX1'][i-1] + data['CW_2'][i-1] * data['UX2'][i-1])    
+            
+            if (i==2):
+                Q1_prev = 0
+                Q2_prev = 0
+            else:            
+                Q1_prev = data['CW_1'][i-2] / (data['CW_1'][i-2] * data['UX2'][i-2] + data['CW_2'][i-2] * data['UX3'][i-2])            
+                Q2_prev = data['CW_2'][i-2] / (data['CW_1'][i-2] * data['UX2'][i-2] + data['CW_2'][i-2] * data['UX3'][i-2])    
+            
+            data['strat'][i] = data['strat'][i-1] * (1.0 + Q1_prev * (data['UX1'][i] - data['UX1'][i-1])
+                                                         + (Q1 - Q1_prev) * (data['UX1'][i] - (data['UX1'][i-1] + np.sign(Q1 - Q1_prev)*0.5*cost))
+                                                         + Q2_prev * (data['UX2'][i] - data['UX2'][i-1])
+                                                         + (Q2 - Q2_prev) * (data['UX2'][i] - (data['UX2'][i-1] + np.sign(Q2 - Q2_prev)*0.5*cost)))
+        else:
+            Q1 = data['CW_1'][i-1] / (data['CW_1'][i-1] * data['UX1'][i-1] + data['CW_2'][i-1] * data['UX2'][i-1])            
+            Q2 = data['CW_2'][i-1] / (data['CW_1'][i-1] * data['UX1'][i-1] + data['CW_2'][i-1] * data['UX2'][i-1])    
+            
+            if (i==2):
+                Q1_prev = 0
+                Q2_prev = 0
+            else:            
+                Q1_prev = data['CW_1'][i-2] / (data['CW_1'][i-2] * data['UX1'][i-2] + data['CW_2'][i-2] * data['UX2'][i-2])            
+                Q2_prev = data['CW_2'][i-2] / (data['CW_1'][i-2] * data['UX1'][i-2] + data['CW_2'][i-2] * data['UX2'][i-2])    
+            
+            data['strat'][i] = data['strat'][i-1] * (1.0 + Q1_prev * (data['UX1'][i] - data['UX1'][i-1])
+                                                         + (Q1 - Q1_prev) * (data['UX1'][i] - (data['UX1'][i-1] + np.sign(Q1 - Q1_prev)*0.5*cost))
+                                                         + Q2_prev * (data['UX2'][i] - data['UX2'][i-1])
+                                                         + (Q2 - Q2_prev) * (data['UX2'][i] - (data['UX2'][i-1] + np.sign(Q2 - Q2_prev)*0.5*cost)))
+                                                         
+        data['Q1'][i] = Q1
+        data['Q2'][i] = Q2
+        data['Q1_prev'][i] = Q1_prev
+        data['Q2_prev'][i] = Q2_prev
+    return data
+    
+#Plot the strat
+data = shortTerm()
+data.index = data['dates']
+data['strat'].plot()
+#data.to_csv(r'C:\Users\sjin\Desktop\test3.csv')

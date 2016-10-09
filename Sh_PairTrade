@@ -1,0 +1,1 @@
+Private Sub Load_PT_Click()Call Pair_Trade.pair_trade_analyse(Range("h3"), Range("h4"), Range("c3"), Range("c4"), Range("d3"), _            Range("d4"), Range("e3"), Range("e4"))End Sub

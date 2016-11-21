@@ -1,0 +1,67 @@
+Private Sub Date_Serial(Start_date, End_date, myarray() As Single, length_data_point)
+    start_year = Year(Start_date)
+    end_year = Year(End_date)
+    length_data_point = end_year - start_year + 2
+    ReDim myarray(1 To length_data_point)
+    myarray(1) = Start_date
+    myarray(length_data_point) = End_date
+    If length_data_point > 2 Then
+        For i = 2 To length_data_point - 1
+            myarray(i) = DateSerial(start_year + i - 1, 1, 1)
+        Next i
+    End If
+End Sub
+
+Private Sub Date_Serial_month(Start_date, End_date, myarray() As Single, length_data_point)
+    start_year = Year(Start_date)
+    end_year = Year(End_date)
+    length_data_point = end_year - start_year + 2
+    ReDim myarray(1 To length_data_point)
+    myarray(1) = Start_date
+    myarray(length_data_point) = End_date
+    If length_data_point > 2 Then
+        For i = 2 To length_data_point - 1
+            myarray(i) = DateSerial(start_year + i - 1, 1, 1)
+        Next i
+    End If
+End Sub
+
+
+Sub fill_formula_ptp(i, j)
+
+    myDate = Date
+    Dim myarr() As Single
+    Call Date_Serial(Cells(2, j - 1).Value, Cells(i, j - 1).Value, myarr, length_data_point)
+    formula_string = "="
+    For k = 1 To length_data_point - 1
+        formula_string = formula_string & "+Min(0.05,BDH(R1C" & CStr(j) & ",""Last_price"",""" & CDate(myarr(k + 1)) & """,""" & CDate(myarr(k + 1)) & """)/BDH(R1C" & CStr(j) & ",""Last_price"",""" & CDate(myarr(k)) & """,""" & CDate(myarr(k)) & """)-1)"
+    Next k
+    Cells(i, j).FormulaR1C1 = formula_string
+End Sub
+
+
+Sub fill_formula_pti(i, j)
+
+    myDate = Date
+    Dim myarr() As Single
+    Call Date_Serial(Cells(2, j - 1).Value, Cells(i, j - 1).Value, myarr, length_data_point)
+    formula_string = "="
+    For k = 1 To length_data_point - 1
+        formula_string = formula_string & "+if(BDH(R1C" & CStr(j) & ",""Last_price"",""" & CDate(myarr(k + 1)) & """,""" & CDate(myarr(k + 1)) & """)/BDH(R1C" & CStr(j) & ",""Last_price"",""" & CDate(myarr(k)) & """,""" & CDate(myarr(k)) & """)>1,0.3,0)"
+    Next k
+    Cells(i, j).FormulaR1C1 = formula_string
+End Sub
+
+Sub fill_formula_irb(i, j)
+
+    myDate = Date
+    Dim myarr() As Single
+    Call Date_Serial(Cells(2, j - 1).Value, Cells(i, j - 1).Value, myarr, length_data_point)
+    formula_string = "="
+    For k = 1 To length_data_point - 1
+        formula_string = formula_string & "+4*Max(BDH(R1C" & CStr(j) & ",""Last_price"",""" & CDate(myarr(k + 1)) & """,""" & CDate(myarr(k + 1)) & """)-BDH(R1C" & CStr(j) & ",""Last_price"",""" & CDate(myarr(k)) & """,""" & CDate(myarr(k)) & """),0)"
+    Next k
+    Cells(i, j).FormulaR1C1 = formula_string
+End Sub
+
+
